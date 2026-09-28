@@ -7,7 +7,7 @@ export function DeletePollButton({ pollId }: { pollId: number }) {
     <form
       action={deletePollFormAction}
       onSubmit={(event) => {
-        if (!confirm("이 설문을 삭제할까요? 삭제하면 되돌릴 수 없습니다.")) {
+        if (!confirm("이 투표를 삭제할까요? 삭제하면 되돌릴 수 없습니다.")) {
           event.preventDefault();
         }
       }}

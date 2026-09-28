@@ -23,7 +23,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       lang="en"
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col">{children}</body>
+      <body className="min-h-full flex flex-col">
+        <span className="fixed top-4 right-4 z-50 text-sm font-medium text-zinc-500 dark:text-zinc-400">
+          202204273 조민규
+        </span>
+        {children}
+      </body>
     </html>
   );
 }

@@ -12,7 +12,7 @@ export function CreatePollForm() {
       action={action}
       className="flex w-full max-w-lg flex-col gap-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800"
     >
-      <h2 className="text-lg font-semibold">새 설문 만들기</h2>
+      <h2 className="text-lg font-semibold">새 투표 만들기</h2>
 
       <div className="flex flex-col gap-2">
         <label htmlFor="question" className="text-sm font-medium">
@@ -69,7 +69,7 @@ export function CreatePollForm() {
         disabled={pending}
         className="self-start rounded-full bg-foreground px-5 py-2 text-sm font-medium text-background disabled:opacity-50"
       >
-        {pending ? "만드는 중..." : "설문 만들기"}
+        {pending ? "만드는 중..." : "투표 만들기"}
       </button>
     </form>
   );

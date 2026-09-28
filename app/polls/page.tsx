@@ -29,7 +29,7 @@ export default async function PollsListPage() {
   return (
     <div className="flex flex-1 flex-col gap-6 px-6 py-16 sm:px-16">
       <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold">설문 목록</h1>
+        <h1 className="text-2xl font-semibold">투표 목록</h1>
         <Link
           href="/operator/login"
           className="text-sm text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
@@ -38,7 +38,7 @@ export default async function PollsListPage() {
         </Link>
       </div>
       {polls.length === 0 && (
-        <p className="text-sm text-zinc-500">아직 등록된 설문이 없습니다.</p>
+        <p className="text-sm text-zinc-500">아직 등록된 투표가 없습니다.</p>
       )}
       {openPolls.length > 0 && (
         <div className="flex flex-col gap-2">

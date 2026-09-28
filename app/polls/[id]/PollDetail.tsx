@@ -53,9 +53,9 @@ export function PollDetail({
       if (!result.ok) {
         setError(
           result.error === "already_voted"
-            ? "이미 이 설문에 투표했습니다."
+            ? "이미 이 투표에 투표했습니다."
             : result.error === "poll_closed"
-              ? "마감된 설문에는 투표할 수 없습니다."
+              ? "마감된 투표에는 투표할 수 없습니다."
               : "투표를 제출할 수 없습니다.",
         );
         return;
@@ -80,7 +80,7 @@ export function PollDetail({
           instead of a live countdown. */}
       {poll.closesAt && !poll.isClosed && <Countdown closesAt={poll.closesAt} />}
       {poll.closesAt && poll.isClosed && (
-        <p className="text-sm text-zinc-500">마감된 설문입니다.</p>
+        <p className="text-sm text-zinc-500">마감된 투표입니다.</p>
       )}
 
       {!poll.hasVoted && !poll.isOperatorView && (
@@ -105,7 +105,7 @@ export function PollDetail({
           </fieldset>
           {poll.isClosed && (
             <p className="text-sm text-zinc-500">
-              마감된 설문입니다. 더 이상 투표할 수 없습니다.
+              마감된 투표입니다. 더 이상 투표할 수 없습니다.
             </p>
           )}
           {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
