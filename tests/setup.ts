@@ -18,7 +18,15 @@ dotenv.config({ path: path.resolve(__dirname, "..", ".env.local"), quiet: true }
 // import) so it's only evaluated after dotenv.config() above has already run
 // — lib/db.ts reads DATABASE_URL/TEST_DATABASE_URL at module-load time, and
 // static imports would otherwise be hoisted ahead of the dotenv.config() call.
+//
+// Skipped entirely when TEST_DATABASE_URL isn't configured: this setupFile
+// runs for *every* test file, including DB-free pure-function ones (e.g.
+// tests/lib/*.test.ts), which never touch the database and shouldn't be
+// failed by a cleanup hook for a connection they never opened. A file that
+// does use the DB already fails fast at its own top-level `lib/db.ts`
+// import in that case, so this guard doesn't hide a real problem there.
 afterAll(async () => {
+  if (!process.env.TEST_DATABASE_URL) return;
   const { truncateAll } = await import("./helpers/db");
   await truncateAll();
 });

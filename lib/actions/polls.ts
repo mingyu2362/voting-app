@@ -1,12 +1,23 @@
 import { randomUUID } from "node:crypto";
 import { sql } from "@/lib/db";
 import { isOperatorSession } from "@/lib/actions/auth";
+import { computePercent } from "@/lib/poll-percent";
+import { isPollClosed, sortPollsByStatus, toDateMs, type ClosesAt } from "@/lib/poll-status";
 
 // This is the server-action seam for 설문(Poll)/선택지(Choice)/투표(Vote), per
 // .scratch/voting-app/spec.md "Testing Decisions". Like lib/actions/auth.ts,
 // these functions accept session/voter tokens as plain arguments instead of
 // reading `next/headers` cookies() directly, so they're callable from Vitest
 // with no mocking and from the thin "use server" wrappers under app/**.
+
+/** Normalizes a closes_at value coming back from Postgres (a Date, an ISO
+ * string, or null depending on the driver) into a plain ISO string or null —
+ * the shape every server-action return type uses so it's safe to pass across
+ * the server/client boundary. */
+function toIsoOrNull(value: ClosesAt): string | null {
+  const ms = toDateMs(value);
+  return ms === null ? null : new Date(ms).toISOString();
+}
 
 export type CreatePollResult =
   | { ok: true; poll: PollSummary }
@@ -17,6 +28,7 @@ export type PollSummary = {
   id: number;
   question: string;
   choices: { id: number; label: string; position: number }[];
+  closesAt: string | null;
 };
 
 /**
@@ -25,11 +37,16 @@ export type PollSummary = {
  * single SQL statement (a data-modifying CTE feeding a second insert) so
  * Postgres itself guarantees "poll + choices, or neither" with no
  * multi-statement transaction wiring needed.
+ *
+ * `closesAt` is optional and, unlike `question`/choices, remains mutable
+ * after creation via `updatePollDeadline` (see 설문/마감 in CONTEXT.md) —
+ * omitting it (or passing null) means the poll runs forever.
  */
 export async function createPoll(
   sessionToken: string | undefined | null,
   question: string,
   choiceLabels: string[],
+  closesAt: Date | null = null,
 ): Promise<CreatePollResult> {
   if (!isOperatorSession(sessionToken)) {
     return { ok: false, error: "unauthorized" };
@@ -53,7 +70,7 @@ export async function createPoll(
 
   const rows = await sql`
     WITH new_poll AS (
-      INSERT INTO polls (question) VALUES (${trimmedQuestion})
+      INSERT INTO polls (question, closes_at) VALUES (${trimmedQuestion}, ${closesAt})
       RETURNING id
     )
     INSERT INTO choices (poll_id, label, position)
@@ -76,16 +93,81 @@ export async function createPoll(
 
   return {
     ok: true,
-    poll: { id: pollId, question: trimmedQuestion, choices },
+    poll: {
+      id: pollId,
+      question: trimmedQuestion,
+      choices,
+      // No need to round-trip through the DB for this — it's exactly the
+      // value we just inserted.
+      closesAt: closesAt ? closesAt.toISOString() : null,
+    },
   };
 }
 
-/** Returns every Poll's id + question only (no vote counts). */
-export async function listPolls(): Promise<{ id: number; question: string }[]> {
-  const rows = await sql`
-    SELECT id, question FROM polls ORDER BY created_at DESC, id DESC
-  `;
-  return rows as unknown as { id: number; question: string }[];
+export type UpdatePollDeadlineResult =
+  | { ok: true; poll: { id: number; closesAt: string | null } }
+  | { ok: false; error: "unauthorized" }
+  | { ok: false; error: "not_found" };
+
+/**
+ * Sets, changes, or clears (`closesAt = null`) a Poll's `closes_at` — the one
+ * field an Operator can edit after creation (question/choices stay
+ * immutable, per CONTEXT.md). "지금 마감하기" (close now) is just this
+ * function called with `closesAt = new Date(now)`; there is no separate
+ * boolean/status column (docs/adr/0004-deadline-computed-not-scheduled.md).
+ * Requires a valid operator session, checked with the same injectable-clock
+ * pattern as `isOperatorSession` elsewhere in this codebase.
+ */
+export async function updatePollDeadline(
+  sessionToken: string | undefined | null,
+  pollId: number,
+  closesAt: Date | null,
+  now: number = Date.now(),
+): Promise<UpdatePollDeadlineResult> {
+  if (!isOperatorSession(sessionToken, now)) {
+    return { ok: false, error: "unauthorized" };
+  }
+
+  const rows = (await sql`
+    UPDATE polls SET closes_at = ${closesAt} WHERE id = ${pollId}
+    RETURNING id, closes_at
+  `) as unknown as { id: number; closes_at: string | Date | null }[];
+
+  if (rows.length === 0) {
+    return { ok: false, error: "not_found" };
+  }
+
+  return { ok: true, poll: { id: rows[0].id, closesAt: toIsoOrNull(rows[0].closes_at) } };
+}
+
+export type PollListItem = {
+  id: number;
+  question: string;
+  closesAt: string | null;
+  isClosed: boolean;
+};
+
+/**
+ * Returns every Poll's id/question/closesAt/isClosed (no vote counts). Open
+ * polls are listed before 마감(Closed) ones, newest-first within each group
+ * — see .scratch/voting-app-deadline/issues/05-poll-list-sorting.md. The
+ * ordering itself is delegated to the pure, unit-tested `sortPollsByStatus`;
+ * this function's own job is only the DB fetch, newest-first as a tie-break
+ * baseline within each group.
+ */
+export async function listPolls(now: number = Date.now()): Promise<PollListItem[]> {
+  const rows = (await sql`
+    SELECT id, question, closes_at FROM polls ORDER BY created_at DESC, id DESC
+  `) as unknown as { id: number; question: string; closes_at: string | Date | null }[];
+
+  const items: PollListItem[] = rows.map((row) => ({
+    id: row.id,
+    question: row.question,
+    closesAt: toIsoOrNull(row.closes_at),
+    isClosed: isPollClosed(row.closes_at, now),
+  }));
+
+  return sortPollsByStatus(items, now);
 }
 
 export type DeletePollResult =
@@ -126,9 +208,24 @@ export type PollView = {
   question: string;
   choices: PollChoice[];
   hasVoted: boolean;
-  /** True if the caller (voter who already voted on this poll, or an
-   * operator) is allowed to see vote counts. */
+  /** True if the caller (voter who already voted on this poll, an operator,
+   * or anyone once the poll is 마감/Closed) is allowed to see vote counts.
+   * Computed live from `isClosed` on every call, never a stored "revealed"
+   * flag — see docs/adr/0003-live-computed-result-visibility.md. If an
+   * operator extends `closesAt` back into the future, this flips back to the
+   * normal voted-only gate (intentional, not a bug). */
   resultsVisible: boolean;
+  /** True when the caller holds a valid operator session. The vote
+   * form/button must never render for an operator view (it's a read-only
+   * monitoring page, not a ballot) — `hasVoted` alone isn't enough to tell,
+   * since an operator has no voter_token and so is indistinguishable from a
+   * "hasn't voted yet" visitor on that field alone. */
+  isOperatorView: boolean;
+  /** Null means the poll runs forever (무기한). */
+  closesAt: string | null;
+  /** `closesAt !== null && closesAt <= now`, recomputed on every call — no
+   * stored status column (docs/adr/0004-deadline-computed-not-scheduled.md). */
+  isClosed: boolean;
   totalVotes?: number;
   results?: PollResult[];
 };
@@ -138,22 +235,27 @@ export type GetPollResult = { ok: true; poll: PollView } | { ok: false; error: "
 /**
  * Returns a Poll's question and choices. Numbers (vote counts, percentages,
  * total votes) are only included when the caller has already voted on this
- * poll (identified by `voterToken`) or holds a valid operator session
- * (`sessionToken`) — see docs/adr and ticket 05/08 acceptance criteria.
+ * poll (identified by `voterToken`), holds a valid operator session
+ * (`sessionToken`), or the poll is 마감(Closed) — see docs/adr/0003 and
+ * ticket 03/05/08 acceptance criteria. `now` is injectable (defaults to the
+ * real clock) so tests can deterministically simulate "just past closesAt"
+ * without waiting for real time to pass.
  */
 export async function getPoll(
   pollId: number,
   voterToken: string | undefined | null,
   sessionToken?: string | undefined | null,
+  now: number = Date.now(),
 ): Promise<GetPollResult> {
   const pollRows = (await sql`
-    SELECT id, question FROM polls WHERE id = ${pollId}
-  `) as unknown as { id: number; question: string }[];
+    SELECT id, question, closes_at FROM polls WHERE id = ${pollId}
+  `) as unknown as { id: number; question: string; closes_at: string | Date | null }[];
 
   if (pollRows.length === 0) {
     return { ok: false, error: "not_found" };
   }
   const poll = pollRows[0];
+  const isClosed = isPollClosed(poll.closes_at, now);
 
   const choiceRows = (await sql`
     SELECT id, label, position FROM choices WHERE poll_id = ${pollId} ORDER BY position ASC
@@ -167,7 +269,8 @@ export async function getPoll(
     hasVoted = voteRows.length > 0;
   }
 
-  const resultsVisible = hasVoted || isOperatorSession(sessionToken);
+  const isOperatorView = isOperatorSession(sessionToken, now);
+  const resultsVisible = hasVoted || isOperatorView || isClosed;
 
   const base: PollView = {
     id: poll.id,
@@ -175,6 +278,9 @@ export async function getPoll(
     choices: choiceRows,
     hasVoted,
     resultsVisible,
+    isOperatorView,
+    closesAt: toIsoOrNull(poll.closes_at),
+    isClosed,
   };
 
   if (!resultsVisible) {
@@ -193,7 +299,7 @@ export async function getPoll(
 
   const results: PollResult[] = choiceRows.map((choice) => {
     const votes = countByChoiceId.get(choice.id) ?? 0;
-    const percent = totalVotes === 0 ? 0 : Math.round((votes / totalVotes) * 1000) / 10;
+    const percent = computePercent(votes, totalVotes);
     return { choiceId: choice.id, label: choice.label, votes, percent };
   });
 
@@ -204,7 +310,8 @@ export type CastVoteResult =
   | { ok: true; voterToken: string; poll: PollView }
   | { ok: false; error: "already_voted"; voterToken: string }
   | { ok: false; error: "not_found" }
-  | { ok: false; error: "invalid_choice" };
+  | { ok: false; error: "invalid_choice" }
+  | { ok: false; error: "poll_closed" };
 
 function isUniqueViolation(error: unknown): boolean {
   return (
@@ -221,23 +328,35 @@ function isUniqueViolation(error: unknown): boolean {
  * cookie). Rejects a second vote from the same voter_token on the same poll,
  * both via an application-level pre-check and, as a safety net for
  * concurrent requests, the DB's `UNIQUE (poll_id, voter_token)` constraint.
+ * Also rejects any vote once the poll is 마감(Closed) — re-checked here
+ * server-side on every call (ticket 03) regardless of what a client's
+ * disabled-button/countdown UI shows, since those can't be trusted alone.
+ * `now` is injectable for the same reason as `getPoll`'s.
  */
 export async function castVote(
   pollId: number,
   choiceId: number,
   voterToken: string | undefined | null,
+  now: number = Date.now(),
 ): Promise<CastVoteResult> {
   const token = voterToken || randomUUID();
+
+  const pollRows = (await sql`
+    SELECT id, closes_at FROM polls WHERE id = ${pollId}
+  `) as unknown as { id: number; closes_at: string | Date | null }[];
+  if (pollRows.length === 0) {
+    return { ok: false, error: "not_found" };
+  }
 
   const choiceRows = await sql`
     SELECT id FROM choices WHERE id = ${choiceId} AND poll_id = ${pollId}
   `;
   if (choiceRows.length === 0) {
-    const pollRows = await sql`SELECT id FROM polls WHERE id = ${pollId}`;
-    if (pollRows.length === 0) {
-      return { ok: false, error: "not_found" };
-    }
     return { ok: false, error: "invalid_choice" };
+  }
+
+  if (isPollClosed(pollRows[0].closes_at, now)) {
+    return { ok: false, error: "poll_closed" };
   }
 
   const existingVote = await sql`
@@ -258,7 +377,7 @@ export async function castVote(
     throw error;
   }
 
-  const afterVote = await getPoll(pollId, token, undefined);
+  const afterVote = await getPoll(pollId, token, undefined, now);
   if (!afterVote.ok) {
     throw new Error("Poll disappeared immediately after a vote was cast.");
   }

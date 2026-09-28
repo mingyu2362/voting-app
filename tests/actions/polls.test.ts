@@ -73,6 +73,10 @@ describe("createPoll (ticket 03)", () => {
     const polls = await listPolls();
     const created = polls.find((p) => p.question === "새 설문");
     expect(created).toBeDefined();
-    expect(Object.keys(created!).sort()).toEqual(["id", "question"]);
+    // ticket 05 extended listPolls to also carry closesAt/isClosed (still no
+    // vote counts/results) so the list page can sort open-before-closed.
+    expect(Object.keys(created!).sort()).toEqual(["closesAt", "id", "isClosed", "question"]);
+    expect(created!.closesAt).toBeNull();
+    expect(created!.isClosed).toBe(false);
   });
 });

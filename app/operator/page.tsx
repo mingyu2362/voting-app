@@ -5,6 +5,7 @@ import { listPolls } from "@/lib/actions/polls";
 import { logoutAction } from "./actions";
 import { CreatePollForm } from "./CreatePollForm";
 import { DeletePollButton } from "./DeletePollButton";
+import { EditDeadlineForm } from "./EditDeadlineForm";
 
 export default async function OperatorDashboardPage() {
   if (!(await isOperatorLoggedIn())) {
@@ -17,21 +18,24 @@ export default async function OperatorDashboardPage() {
     <div className="flex flex-1 flex-col gap-8 px-6 py-16 sm:px-16">
       <div className="flex items-center justify-between">
         <h1 className="text-2xl font-semibold">운영자 대시보드</h1>
-        <div className="flex items-center gap-4">
-          <Link
-            href="/polls"
-            className="text-sm text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
-          >
-            설문 목록 보기
-          </Link>
-          <form action={logoutAction}>
-            <button
-              type="submit"
-              className="rounded-full border border-zinc-300 px-4 py-2 text-sm dark:border-zinc-700"
+        <div className="flex flex-col items-end gap-2">
+          <span className="text-sm font-medium">202204273 조민규</span>
+          <div className="flex items-center gap-4">
+            <Link
+              href="/polls"
+              className="text-sm text-zinc-500 underline hover:text-zinc-700 dark:hover:text-zinc-300"
             >
-              로그아웃
-            </button>
-          </form>
+              설문 목록 보기
+            </Link>
+            <form action={logoutAction}>
+              <button
+                type="submit"
+                className="rounded-full border border-zinc-300 px-4 py-2 text-sm dark:border-zinc-700"
+              >
+                로그아웃
+              </button>
+            </form>
+          </div>
         </div>
       </div>
 
@@ -43,18 +47,27 @@ export default async function OperatorDashboardPage() {
           <p className="text-sm text-zinc-500">아직 만든 설문이 없습니다.</p>
         )}
         <ul className="flex flex-col gap-2">
+          {/* listPolls() already returns open polls before 마감(closed) ones
+              (sortPollsByStatus, ticket 05) — this list renders them as-is. */}
           {polls.map((poll) => (
             <li
               key={poll.id}
-              className="flex items-center justify-between rounded-md border border-zinc-200 px-4 py-3 dark:border-zinc-800"
+              className="flex flex-col gap-2 rounded-md border border-zinc-200 px-4 py-3 dark:border-zinc-800"
             >
-              <Link
-                href={`/operator/polls/${poll.id}`}
-                className="text-sm font-medium underline"
-              >
-                {poll.question}
-              </Link>
-              <DeletePollButton pollId={poll.id} />
+              <div className="flex items-center justify-between">
+                <Link
+                  href={`/operator/polls/${poll.id}`}
+                  className="text-sm font-medium underline"
+                >
+                  {poll.question}
+                </Link>
+                <DeletePollButton pollId={poll.id} />
+              </div>
+              <EditDeadlineForm
+                pollId={poll.id}
+                closesAt={poll.closesAt}
+                isClosed={poll.isClosed}
+              />
             </li>
           ))}
         </ul>

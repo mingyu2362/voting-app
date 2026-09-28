@@ -48,6 +48,18 @@ export function CreatePollForm() {
         </button>
       </div>
 
+      <div className="flex flex-col gap-2">
+        <label htmlFor="closesAt" className="text-sm font-medium">
+          마감 시각 (선택, 비워두면 무기한)
+        </label>
+        <input
+          id="closesAt"
+          name="closesAt"
+          type="datetime-local"
+          className="rounded-md border border-zinc-300 px-3 py-2 text-sm dark:border-zinc-700 dark:bg-zinc-900"
+        />
+      </div>
+
       {state?.error && (
         <p className="text-sm text-red-600 dark:text-red-400">{state.error}</p>
       )}
