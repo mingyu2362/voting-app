@@ -10,7 +10,7 @@ export function CreatePollForm() {
   return (
     <form
       action={action}
-      className="flex w-full max-w-lg flex-col gap-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800"
+      className="mx-auto flex w-full max-w-lg flex-col gap-4 rounded-lg border border-zinc-200 p-6 dark:border-zinc-800"
     >
       <h2 className="text-lg font-semibold">새 투표 만들기</h2>
 
